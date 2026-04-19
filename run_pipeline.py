@@ -448,6 +448,18 @@ def main():
         help="Number of reruns per occupation per template (default: 5; smoke defaults to 1)",
     )
     parser.add_argument(
+        "--occ-workers",
+        type=int,
+        default=1,
+        help="Parallel threads for occupation_bias prompts (default: 1; try 4 with OLLAMA_NUM_PARALLEL=4)",
+    )
+    parser.add_argument(
+        "--occ-num-predict",
+        type=int,
+        default=None,
+        help="Max tokens per bias response (default: unlimited; try 100 for faster runs)",
+    )
+    parser.add_argument(
         "--amstar2-limit",
         type=int,
         default=None,
@@ -621,6 +633,8 @@ def main():
             occupations=occupation_list,
             repeats=occ_repeats,
             temperature=0.7,
+            num_workers=args.occ_workers,
+            num_predict=args.occ_num_predict,
             save_csv=True,
             save_sqlite=True,
             save_plots=True,

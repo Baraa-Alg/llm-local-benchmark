@@ -17,6 +17,8 @@ def run_occupation_gender_bias(
     occupations: Optional[List[str]] = None,
     repeats: int = 1,
     temperature: float = 0.7,
+    num_workers: int = 1,
+    num_predict: Optional[int] = None,
     save_csv: bool = True,
     save_sqlite: bool = False,
     save_plots: bool = True,
@@ -46,14 +48,18 @@ def run_occupation_gender_bias(
     for model_name, adapter in tqdm(list(runner.models.items()), desc="Occ-bias models"):
         print(f"Evaluating model: {model_name}")
 
-        # Temporarily override temperature for variation
+        # Temporarily override temperature (and optionally num_predict) for bias eval
         original_temp = getattr(adapter, "temperature", 0.0)
+        original_options = dict(getattr(adapter, "options", {}) or {})
         adapter.temperature = temperature
+        if num_predict is not None:
+            adapter.options = {**original_options, "num_predict": num_predict}
 
-        result = evaluator.evaluate(adapter, repeats=repeats)
+        result = evaluator.evaluate(adapter, repeats=repeats, num_workers=num_workers)
 
-        # Restore original temperature
+        # Restore original settings
         adapter.temperature = original_temp
+        adapter.options = original_options
 
         overall_rows.append({
             "model": model_name,

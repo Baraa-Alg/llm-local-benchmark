@@ -1,5 +1,6 @@
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import numpy as np
 
@@ -90,60 +91,87 @@ class OccupationGenderBiasEvaluator:
         occ_lower = occupation.lower()
         return occ_lower in tokens or f"the {occ_lower}" in text.lower()
 
-    def evaluate(self, adapter, repeats: int = 1) -> dict:
+    def evaluate(self, adapter, repeats: int = 1, num_workers: int = 1) -> dict:
+        # Phase 1: build the full job list upfront
+        jobs = [
+            (occ, tmpl, tmpl.format(occupation=occ))
+            for occ in self.occupations
+            for tmpl in self.prompt_templates
+            for _ in range(max(1, repeats))
+        ]
+
+        # Phase 2: run all generate() calls — parallel if num_workers > 1
+        # Only HTTP calls are parallelised; accumulation stays single-threaded.
+        raw: list[tuple[str, str, str, str]] = []  # (occ, template, prompt, output)
+
+        if num_workers > 1:
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                future_map = {
+                    executor.submit(adapter.generate, prompt): (occ, tmpl, prompt)
+                    for occ, tmpl, prompt in jobs
+                }
+                for future in tqdm(as_completed(future_map), total=len(jobs),
+                                   desc="Prompts", leave=False):
+                    occ, tmpl, prompt = future_map[future]
+                    try:
+                        out, _ = future.result()
+                    except Exception:
+                        out = ""
+                    raw.append((occ, tmpl, prompt, out))
+        else:
+            for occ, tmpl, prompt in tqdm(jobs, desc="Prompts", leave=False):
+                try:
+                    out, _ = adapter.generate(prompt)
+                except Exception:
+                    out = ""
+                raw.append((occ, tmpl, prompt, out))
+
+        # Phase 3: classify and accumulate (single-threaded — no race conditions)
         per_occ = defaultdict(lambda: {
             "total": 0, "male": 0, "female": 0, "neutral": 0, "evasion": 0,
         })
         samples = []
 
-        for occ in tqdm(self.occupations, desc="Occupations", leave=False):
-            for template in self.prompt_templates:
-                for _ in range(max(1, repeats)):
-                    prompt = template.format(occupation=occ)
-                    try:
-                        out, _ = adapter.generate(prompt)
-                    except Exception:
-                        out = ""
+        for occ, template, prompt, out in raw:
+            male_terms, female_terms, neutral_terms = self._extract_terms(out)
+            has_male = len(male_terms) > 0
+            has_female = len(female_terms) > 0
+            has_neutral = len(neutral_terms) > 0
+            has_evasion = self._detect_evasion(out, occ)
 
-                    male_terms, female_terms, neutral_terms = self._extract_terms(out)
-                    has_male = len(male_terms) > 0
-                    has_female = len(female_terms) > 0
-                    has_neutral = len(neutral_terms) > 0
-                    has_evasion = self._detect_evasion(out, occ)
+            per_occ[occ]["total"] += 1
+            if has_male:
+                per_occ[occ]["male"] += 1
+            if has_female:
+                per_occ[occ]["female"] += 1
+            if has_neutral:
+                per_occ[occ]["neutral"] += 1
+            if has_evasion:
+                per_occ[occ]["evasion"] += 1
 
-                    per_occ[occ]["total"] += 1
-                    if has_male:
-                        per_occ[occ]["male"] += 1
-                    if has_female:
-                        per_occ[occ]["female"] += 1
-                    if has_neutral:
-                        per_occ[occ]["neutral"] += 1
-                    if has_evasion:
-                        per_occ[occ]["evasion"] += 1
+            label = (
+                "both" if (has_male and has_female) else
+                "male" if has_male else
+                "female" if has_female else
+                "neutral" if has_neutral else
+                "evasion" if has_evasion else
+                "none"
+            )
 
-                    label = (
-                        "both" if (has_male and has_female) else
-                        "male" if has_male else
-                        "female" if has_female else
-                        "neutral" if has_neutral else
-                        "evasion" if has_evasion else
-                        "none"
-                    )
-
-                    samples.append({
-                        "occupation": occ,
-                        "template": template,
-                        "prompt": prompt,
-                        "output": out,
-                        "has_male": has_male,
-                        "has_female": has_female,
-                        "has_neutral": has_neutral,
-                        "has_evasion": has_evasion,
-                        "male_terms": ",".join(male_terms),
-                        "female_terms": ",".join(female_terms),
-                        "neutral_terms": ",".join(neutral_terms),
-                        "label": label,
-                    })
+            samples.append({
+                "occupation": occ,
+                "template": template,
+                "prompt": prompt,
+                "output": out,
+                "has_male": has_male,
+                "has_female": has_female,
+                "has_neutral": has_neutral,
+                "has_evasion": has_evasion,
+                "male_terms": ",".join(male_terms),
+                "female_terms": ",".join(female_terms),
+                "neutral_terms": ",".join(neutral_terms),
+                "label": label,
+            })
 
         # Build per-occupation table with rates and new metrics
         per_occ_rows = []

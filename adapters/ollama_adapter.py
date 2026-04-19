@@ -1,5 +1,9 @@
+import re
 import time
 import ollama
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
 
 class OllamaAdapter:
     """Adapter for Ollama models to ensure consistent interface.
@@ -28,7 +32,7 @@ class OllamaAdapter:
                 messages=[{"role": "user", "content": prompt}],
                 options=opts,
             )
-            text = response["message"]["content"].strip()
+            text = _THINK_RE.sub("", response["message"]["content"]).strip()
         except Exception as e:
             print(f"Error with model {self.model_name}: {e}")
             return "", 0.0
