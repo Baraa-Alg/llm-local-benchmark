@@ -156,25 +156,31 @@ def _update_latest_pointer(base_output_dir: Path, run_dir: Path):
 
 
 MODEL_REGISTRY = {
-    "mistral:7b": lambda: OllamaAdapter("mistral:7b", temperature=0.0),
-    "phi:2.7b": lambda: OllamaAdapter("phi:2.7b", temperature=0.0),
-    "deepseek-r1:8b": lambda: OllamaAdapter("deepseek-r1:8b", temperature=0.0),
-    "gpt-oss:20b": lambda: OllamaAdapter("gpt-oss:20b", temperature=0.0),
-   "qwen3:4b": lambda: OllamaAdapter(
-    "qwen3:4b",
-    temperature=0.0,
-    options={
-        #"num_predict": 100,          
-        #"stop": ["\n"]             
-    }
-),
+    "mistral:7b":    lambda: OllamaAdapter("mistral:7b",    temperature=0.0),
+    "phi:2.7b":      lambda: OllamaAdapter("phi:2.7b",      temperature=0.0),
+    "gemma3:4b":     lambda: OllamaAdapter("gemma3:4b",     temperature=0.0),
+    "llama3.2:3b":   lambda: OllamaAdapter("llama3.2:3b",   temperature=0.0),
 
-    "gemma3:4b": lambda: OllamaAdapter("gemma3:4b", temperature=0.0),
-    "qwen3-vl:8b": lambda: OllamaAdapter("qwen3-vl:8b", temperature=0.0),
-    "llama3.2:3b": lambda: OllamaAdapter("llama3.2:3b", temperature=0.0),
-    "gemma3:12b": lambda: OllamaAdapter("gemma3:12b", temperature=0.0),
+    # Thinking/reasoning models — think:False disables the reasoning chain so the
+    # model outputs its answer directly, avoiding empty responses after think-stripping.
+    "deepseek-r1:8b": lambda: OllamaAdapter(
+        "deepseek-r1:8b", temperature=0.0,
+        options={"think": False},
+    ),
+    # qwen3 ignores think:False — prepend /no_think to the prompt instead (documented fix).
+    "qwen3:4b": lambda: OllamaAdapter(
+        "qwen3:4b", temperature=0.0,
+        options={"no_think": True},
+    ),
+    "qwen3-vl:8b": lambda: OllamaAdapter(
+        "qwen3-vl:8b", temperature=0.0,
+        options={"no_think": True},
+    ),
 
-    
+    # Large model — no token cap; let it generate freely to avoid mid-sentence truncation.
+    "gpt-oss:20b": lambda: OllamaAdapter(
+        "gpt-oss:20b", temperature=0.0,
+    ),
 }
 
 
