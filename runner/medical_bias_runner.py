@@ -6,12 +6,19 @@ import pandas as pd
 import sqlite3
 from tqdm import tqdm
 
-from metrics.medical_bias import MedicalBiasClassifierEvaluator
+from metrics.medical_bias import (
+    MedicalBiasClassifierEvaluator,
+    VALID_CATEGORIES,
+    VALID_TYPES,
+    has_real_category,
+    normalize_category,
+    normalize_type,
+)
 
 
 def _load_dataset(csv_path_or_df) -> pd.DataFrame:
     if isinstance(csv_path_or_df, (str, Path)):
-        df = pd.read_csv(csv_path_or_df)
+        df = pd.read_csv(csv_path_or_df, keep_default_na=False)
     else:
         df = csv_path_or_df.copy()
     cols = {c.lower(): c for c in df.columns}
@@ -26,7 +33,75 @@ def _load_dataset(csv_path_or_df) -> pd.DataFrame:
         type_col: "bias_type",
         cat_col: "bias_category",
     })
+    df["bias_type"] = df["bias_type"].map(normalize_type)
+    df["bias_category"] = df["bias_category"].map(normalize_category)
     return df[["sentence", "bias_type", "bias_category"]]
+
+
+def dataset_sanity_report(df: pd.DataFrame, *, require_full_counts: bool = False) -> dict:
+    gold_type = df["bias_type"].map(normalize_type)
+    gold_category = df["bias_category"].map(normalize_category)
+    real_category = gold_category.map(has_real_category)
+
+    type_counts = {label: int((gold_type == label).sum()) for label in sorted(VALID_TYPES)}
+    real_category_by_type = {
+        label: int((real_category & (gold_type == label)).sum())
+        for label in sorted(VALID_TYPES)
+    }
+    category_scored_n = int(real_category.sum())
+
+    if real_category_by_type["Explicit"] != 0:
+        raise AssertionError("Explicit real category count must be 0 for this dataset.")
+    if real_category_by_type["None"] != 0:
+        raise AssertionError("Neutral real category count must be 0 for this dataset.")
+    if require_full_counts and len(df) == 2007 and real_category_by_type["Implicit"] != 943:
+        raise AssertionError(
+            f"Expected 943 Implicit rows with real categories, got {real_category_by_type['Implicit']}."
+        )
+    if category_scored_n != int(sum(real_category_by_type.values())):
+        raise AssertionError("category_scored_n does not match rows with real categories.")
+
+    return {
+        "total": len(df),
+        "type_counts": type_counts,
+        "real_category_by_type": real_category_by_type,
+        "category_scored_n": category_scored_n,
+        "valid_categories": sorted(VALID_CATEGORIES),
+    }
+
+
+def print_dataset_sanity(df: pd.DataFrame, *, require_full_counts: bool = False) -> dict:
+    report = dataset_sanity_report(df, require_full_counts=require_full_counts)
+    print("\n=== Medical Bias Dataset Sanity ===")
+    print(f"total: {report['total']}")
+    print("counts by gold_type:")
+    for label, count in report["type_counts"].items():
+        print(f"  {label}: {count}")
+    print("real category coverage by gold_type:")
+    for label, count in report["real_category_by_type"].items():
+        print(f"  {label}: {count}")
+    print(f"category_scored_n: {report['category_scored_n']}")
+    print(
+        "WARNING: Category labels are available only for Implicit rows. "
+        "Explicit rows are excluded from category scoring."
+    )
+    return report
+
+
+def _stratified_sample(df: pd.DataFrame, n: int, seed: int) -> pd.DataFrame:
+    """Proportional stratified sample across bias_type (including NaN rows)."""
+    # Treat NaN as its own stratum
+    strat_col = df["bias_type"].fillna("__none__")
+    total = len(df)
+    frames = []
+    for val, grp in df.groupby(strat_col, sort=False):
+        k = max(1, round(n * len(grp) / total))
+        frames.append(grp.sample(min(k, len(grp)), random_state=seed))
+    sampled = pd.concat(frames)
+    # Trim to exactly n if rounding pushed over
+    if len(sampled) > n:
+        sampled = sampled.sample(n, random_state=seed)
+    return sampled.sample(frac=1, random_state=seed).reset_index(drop=True)
 
 
 def run_medical_bias(
@@ -36,6 +111,7 @@ def run_medical_bias(
     save_csv: bool = True,
     save_sqlite: bool = False,
     limit: int | None = 200,
+    seed: int = 42,
 ):
     if not getattr(runner, "models", None):
         print("No models registered for medical bias testing.")
@@ -46,12 +122,16 @@ def run_medical_bias(
         print(f"Medical bias dataset not found at {dataset_csv}")
         return []
 
-    # Limit rows to speed up runs if desired
-    if limit and limit > 0:
-        df_raw = pd.read_csv(dataset_csv, nrows=limit)
-    else:
-        df_raw = pd.read_csv(dataset_csv)
+    df_raw = pd.read_csv(dataset_csv, keep_default_na=False)
     df = _load_dataset(df_raw)
+    full_sanity = print_dataset_sanity(df, require_full_counts=True)
+
+    if limit and 0 < limit < len(df):
+        df = _stratified_sample(df, limit, seed)
+        print(f"Sampled {limit} items (stratified by bias_type, seed={seed}):")
+        print(df["bias_type"].value_counts(dropna=False).to_string())
+        print_dataset_sanity(df, require_full_counts=False)
+
     items = df.to_dict(orient="records")
 
     evaluator = MedicalBiasClassifierEvaluator()
@@ -92,7 +172,23 @@ def run_medical_bias(
         print(f"Saved per-item details to {p_items}")
 
         print("\n=== Medical Bias Overall (per model) ===")
-        print(pd.DataFrame(summary_rows)[["model", "type_accuracy", "category_accuracy", "valid_rate", "total"]].round(4))
+        summary_df = pd.DataFrame(summary_rows)
+        if not summary_df.empty:
+            bad_scored = summary_df[summary_df["category_scored_n"] != full_sanity["category_scored_n"]]
+            if not (limit and 0 < limit < full_sanity["total"]) and not bad_scored.empty:
+                raise AssertionError("summary category_scored_n does not match dataset sanity count.")
+        print(summary_df[[
+            "model",
+            "total",
+            "valid_rate",
+            "type_accuracy",
+            "category_accuracy",
+            "category_scored_n",
+            "neutral_n",
+            "neutral_abstention_rate",
+            "explicit_type_accuracy",
+            "implicit_type_accuracy",
+        ]].round(4))
 
     if save_sqlite and summary_rows:
         db_path = runner.output_dir / "medical_bias.sqlite"
