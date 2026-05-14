@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
+from analysis.amstar2_stats import run_analysis as run_amstar2_stats
 from metrics.amstar2_evaluator import AMSTAR2Evaluator, extract_pdf_text
 
 
@@ -211,6 +212,14 @@ def run_amstar2_evaluation(
         ]
         display_cols = [c for c in display_cols if c in summary_df.columns]
         print(summary_df[display_cols].round(4))
+
+        try:
+            stats_outputs = run_amstar2_stats(out_dir)
+        except Exception as e:
+            print(f"Warning: AMSTAR-2 statistical post-processing failed: {e}")
+        else:
+            for path in stats_outputs.values():
+                print(f"Saved AMSTAR-2 statistical analysis to {path}")
 
     if save_sqlite and summary_rows:
         db_path = out_dir / "amstar2.sqlite"

@@ -279,6 +279,7 @@ def _bootstrap_ci_bias_index(
     samples: list[dict],
     n_boot: int = 2000,
     confidence: float = 0.95,
+    seed: int = _BOOTSTRAP_SEED,
 ) -> tuple[float | None, float | None]:
     """Compute bootstrap 95% CI for bias_index from sample dicts.
 

@@ -70,13 +70,8 @@ def build_amstar2_prompt(article_text: str, max_chars: int = 12000) -> str:
         "Rate overall confidence as: High, Moderate, Low, or Critically Low.\n\n"
         f"AMSTAR-2 items:\n{items_block}\n\n"
         "Respond with ONLY this JSON (no other text):\n"
-        '{"item_1":"Yes","item_2":"No","item_3":"Partial Yes",'
-        '"item_4":"Yes","item_5":"Yes","item_6":"No",'
-        '"item_7":"Partial Yes","item_8":"Yes","item_9":"Yes",'
-        '"item_10":"No","item_11":"No Meta-Analysis",'
-        '"item_12":"No Meta-Analysis","item_13":"Yes",'
-        '"item_14":"Yes","item_15":"No Meta-Analysis",'
-        '"item_16":"Yes","overall_rating":"Low"}\n\n'
+        '{"item_1":"<rating>","item_2":"<rating>",...,'
+        '"item_16":"<rating>","overall_rating":"<overall>"}\n\n'
         f"Article:\n{truncated}\n\n"
         "JSON:"
     )

@@ -98,6 +98,14 @@ Run with strict metric failures:
 python run_pipeline.py --models mistral:7b --smoke --strict-metrics
 ```
 
+Run AMSTAR-2 statistical post-processing for an existing run:
+
+```powershell
+python -m analysis.amstar2_stats --results-dir results/YOUR_AMSTAR2_RUN
+```
+
+This writes bootstrap confidence intervals, paired model tests, item-level confusion matrices, and variance/template-copying checks next to the AMSTAR-2 CSV files. New AMSTAR-2 pipeline runs also generate these files automatically.
+
 ## 5. Outputs
 
 Depending on task, outputs include:
@@ -107,4 +115,5 @@ Depending on task, outputs include:
 - `selected_ids.txt`
 - `run_manifest.json`
 - task-specific bias CSV/SQLite files
+- AMSTAR-2 statistical CSV files (`amstar2_model_ci.csv`, `amstar2_pairwise_tests.csv`, `amstar2_confusion_matrix.csv`, `amstar2_variance_check.csv`)
 - metric plots (`latency_vs_*.png`, `pubmed_latency_vs_*.png`)

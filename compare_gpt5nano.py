@@ -232,6 +232,134 @@ def score_gpt5nano(parquet_dir: Path, gold_ratings: dict[str, dict]) -> dict:
     }
 
 
+def plot_model_overview(combined: pd.DataFrame, output_dir: Path):
+    """Bar chart comparing all models on key AMSTAR-2 metrics."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    metrics = [
+        ("mean_item_accuracy", "Item Accuracy"),
+        ("mean_item_lenient_accuracy", "Lenient Accuracy"),
+        ("critical_item_accuracy", "Critical Items"),
+        ("non_critical_item_accuracy", "Non-Critical Items"),
+        ("overall_rating_accuracy", "Overall Rating"),
+    ]
+    metrics = [(col, label) for col, label in metrics if col in combined.columns]
+
+    df = combined.sort_values("mean_item_accuracy", ascending=False).reset_index(drop=True)
+    models = df["model"].tolist()
+    n_models = len(models)
+    n_metrics = len(metrics)
+
+    x = np.arange(n_models)
+    width = 0.15
+    offsets = np.linspace(-(n_metrics - 1) / 2, (n_metrics - 1) / 2, n_metrics) * width
+
+    fig, ax = plt.subplots(figsize=(max(12, n_models * 1.4), 6))
+    colors = plt.cm.tab10.colors
+
+    for idx, (col, label) in enumerate(metrics):
+        vals = df[col].fillna(0).tolist()
+        bars = ax.bar(x + offsets[idx], vals, width, label=label, color=colors[idx], alpha=0.85)
+        for bar, val in zip(bars, vals):
+            if val > 0.05:
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.01,
+                    f"{val:.2f}",
+                    ha="center", va="bottom", fontsize=6.5, rotation=90,
+                )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(models, rotation=25, ha="right", fontsize=9)
+    ax.set_ylabel("Accuracy")
+    ax.set_ylim(0, 1.15)
+    ax.set_title("AMSTAR-2: Model Comparison (incl. GPT-5-nano)", fontsize=13, fontweight="bold")
+    ax.legend(loc="upper right", fontsize=8)
+    ax.yaxis.grid(True, linestyle="--", alpha=0.5)
+    ax.set_axisbelow(True)
+
+    # Highlight GPT-5-nano column
+    for i, m in enumerate(models):
+        if "gpt-5-nano" in m.lower() or "gpt5nano" in m.lower():
+            ax.axvspan(i - 0.45, i + 0.45, color="gold", alpha=0.15, zorder=0)
+
+    plt.tight_layout()
+    out = output_dir / "amstar2_model_overview.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved model overview plot to {out}")
+
+
+def plot_item_heatmap(combined: pd.DataFrame, gpt5nano_per_item: list[dict],
+                      local_per_item_path: Path, output_dir: Path):
+    """Heatmap of per-item accuracy for every model including GPT-5-nano."""
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    import numpy as np
+
+    # Build per-item data for local models
+    rows = {}
+    if local_per_item_path.exists():
+        local_pi = pd.read_csv(local_per_item_path)
+        for _, r in local_pi.iterrows():
+            model = r["model"]
+            item = int(r["item"])
+            if model not in rows:
+                rows[model] = {}
+            rows[model][item] = r.get("accuracy", 0)
+
+    # Add GPT-5-nano
+    gpt_label = "GPT-5-nano (API)"
+    rows[gpt_label] = {}
+    for r in gpt5nano_per_item:
+        rows[gpt_label][int(r["item"])] = r.get("accuracy", 0)
+
+    # Order models by mean_item_accuracy from combined summary
+    order = combined.sort_values("mean_item_accuracy", ascending=False)["model"].tolist()
+    model_order = [m for m in order if m in rows] + [m for m in rows if m not in order]
+
+    items = list(range(1, 17))
+    matrix = np.array([[rows[m].get(i, float("nan")) for i in items] for m in model_order])
+
+    fig, ax = plt.subplots(figsize=(14, max(5, len(model_order) * 0.55 + 1.5)))
+    cmap = plt.cm.RdYlGn
+    cmap.set_bad("lightgrey")
+    im = ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=0, vmax=1)
+
+    ax.set_xticks(range(16))
+    ax.set_xticklabels([f"Item {i}" for i in items], rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(range(len(model_order)))
+    ax.set_yticklabels(model_order, fontsize=9)
+    ax.set_title("AMSTAR-2 Per-Item Accuracy by Model (incl. GPT-5-nano)", fontsize=12, fontweight="bold")
+
+    # Mark critical items
+    from metrics.amstar2_evaluator import CRITICAL_ITEMS
+    for ci in CRITICAL_ITEMS:
+        ax.axvline(x=ci - 1, color="navy", linewidth=1.5, linestyle="--", alpha=0.5)
+
+    # Annotate cells
+    for r_idx in range(len(model_order)):
+        for c_idx in range(16):
+            val = matrix[r_idx, c_idx]
+            if not np.isnan(val):
+                ax.text(c_idx, r_idx, f"{val:.2f}", ha="center", va="center",
+                        fontsize=6.5, color="black" if 0.3 < val < 0.8 else "white")
+
+    plt.colorbar(im, ax=ax, label="Accuracy", fraction=0.02, pad=0.02)
+    ax.text(
+        0.5, -0.12,
+        "Dashed lines = critical AMSTAR-2 items (2,4,7,9,11,13,15)",
+        transform=ax.transAxes, ha="center", fontsize=8, color="navy",
+    )
+
+    plt.tight_layout()
+    out = output_dir / "amstar2_item_heatmap.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved item heatmap to {out}")
+
+
 def build_comparison_table(local_summary_path: Path, gpt5nano_results: dict, output_dir: Path):
     """Build combined comparison table: local models + GPT-5-nano."""
     if local_summary_path.exists():
@@ -288,6 +416,11 @@ def build_comparison_table(local_summary_path: Path, gpt5nano_results: dict, out
     print("=" * 90)
     print(combined[display_cols].sort_values("mean_item_accuracy", ascending=False).round(4).to_string(index=False))
     print("=" * 90)
+
+    # Plots
+    plot_model_overview(combined, output_dir)
+    local_per_item_path = local_summary_path.parent / "amstar2_per_item.csv"
+    plot_item_heatmap(combined, gpt5nano_results["per_item"], local_per_item_path, output_dir)
 
     return combined
 
