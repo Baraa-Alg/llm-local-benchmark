@@ -54,6 +54,7 @@ def test_medical_bias_scoring_uses_real_category_denominator_only():
 
     assert [row["category_scored"] for row in result["items"]] == [1, 0, 0]
     assert [row["correct_category"] for row in result["items"]] == [1, 0, 0]
+    assert result["items"][2]["raw_response"] == '{"type": "No bias detected", "category": "Health"}'
     assert {row["category"] for row in result["per_category"]} == {"Lifestyle"}
 
 

@@ -154,6 +154,7 @@ class MedicalBiasClassifierEvaluator:
                     "sentence": sentence,
                     "gold_type": gold_type,
                     "gold_category": gold_category,
+                    "raw_response": out,
                     "pred_type": pred_type,
                     "pred_category": pred_category,
                     "category_scored": int(category_scored),
